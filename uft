@@ -1,0 +1,85 @@
+#!/usr/bin/env python3
+import sys
+import socket
+
+# Helper function to ensure reading exactly n bytes from a socket.
+def recvall(sock, n):
+    data = b''
+    while len(data) < n:
+        packet = sock.recv(n - len(data))
+        if not packet:
+            break
+        data += packet
+    return data
+
+# Server mode: listen on the specified port, accept one connection,
+# and write received file data (PDUs) to STDOUT.
+def serve(port):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(('', port))
+    s.listen(1)
+    conn, addr = s.accept()
+    try:
+        while True:
+            # Read the 2-byte header indicating the length of the data segment.
+            header = recvall(conn, 2)
+            if len(header) < 2:
+                break  # connection closed or incomplete header
+            # Interpret header as big-endian unsigned short.
+            data_length = int.from_bytes(header, 'big')
+            # Read the data segment.
+            data = recvall(conn, data_length)
+            if not data:
+                break
+            sys.stdout.buffer.write(data)
+            sys.stdout.buffer.flush()
+    finally:
+        conn.close()
+        s.close()
+
+# Client mode: connect to server and send file data read from STDIN
+# in PDUs that start with a 2-byte length header.
+def client(host, port):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((host, port))
+    try:
+        # Read from STDIN in chunks up to 65535 bytes.
+        while True:
+            chunk = sys.stdin.buffer.read(65535)
+            if not chunk:
+                break
+            header = len(chunk).to_bytes(2, 'big')  # convert length to 2 bytes (big-endian)
+            s.sendall(header)
+            s.sendall(chunk)
+    finally:
+        s.close()
+
+def main():
+    # Usage either: ./uft -l PORT   for server or ./uft SERVER_IP PORT for client.
+    argv = sys.argv
+    if len(argv) < 3:
+        sys.stderr.write("Usage:\n")
+        sys.stderr.write("  Server: ./uft -l PORT > output_file\n")
+        sys.stderr.write("  Client: ./uft SERVER_IP PORT < input_file\n")
+        sys.exit(1)
+    
+    # Server mode: first argument is '-l'
+    if argv[1] == "-l":
+        try:
+            port = int(argv[2])
+        except ValueError:
+            sys.stderr.write("Invalid port number.\n")
+            sys.exit(1)
+        serve(port)
+    # Client mode
+    else:
+        try:
+            host = argv[1]
+            port = int(argv[2])
+        except ValueError:
+            sys.stderr.write("Invalid server address or port number.\n")
+            sys.exit(1)
+        client(host, port)
+
+if __name__ == "__main__":
+    main()
