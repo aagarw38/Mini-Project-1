@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+import sys
+import socket
+from Crypto.Cipher import AES
+from Crypto.Protocol.KDF import PBKDF2
+from Crypto.Util.Padding import pad, unpad
+from Crypto.Random import get_random_bytes
+
+def getData(sock, n):
+    data = b''
+    while len(data) < n:
+        packet = sock.recv(n - len(data))
+        if not packet:
+            break
+        data += packet
+    return data
+
+def server(port, password):
+    """Server: receive the salt then PDUs and decrypt each one."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.bind(('', port))
+        s.listen(1)
+        conn, addr = s.accept()
+        try:
+            # Receive the 16-byte salt and derive the key.
+            salt = getData(conn, 16)
+            if len(salt) < 16:
+                return
+            key = PBKDF2(password, salt, dkLen=32)
+            decrypted_data = b''
+            while True:
+                header = getData(conn, 2)
+                if len(header) < 2:
+                    break  
+                total_len = int.from_bytes(header, 'big')
+                pdu = getData(conn, total_len)
+                if len(pdu) < total_len:
+                    break
+                nonce = pdu[:16]
+                tag   = pdu[16:32]
+                ciphertext = pdu[32:]
+                try:
+                    cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+                    chunk = cipher.decrypt_and_verify(ciphertext, tag)
+                except ValueError:
+                    sys.stderr.write("Error: integrity check failed.")
+                    sys.exit(1)
+                decrypted_data += chunk
+         
+            plaintext = unpad(decrypted_data, 16)
+            sys.stdout.buffer.write(plaintext)
+            sys.stdout.buffer.flush()
+        finally:
+            conn.close()
+    finally:
+        s.close()
+
+def client(host, port, password):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        s.connect((host, port))
+        salt = get_random_bytes(16)
+        s.sendall(salt)
+        key = PBKDF2(password, salt, dkLen=32)
+        plaintext = sys.stdin.buffer.read()
+        padded = pad(plaintext, 16)
+        CHUNK_SIZE = 1024
+        for i in range(0, len(padded), CHUNK_SIZE):
+            chunk = padded[i:i+CHUNK_SIZE]
+            nonce = get_random_bytes(16)
+            cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+            ciphertext, tag = cipher.encrypt_and_digest(chunk)
+            pdu_data = nonce + tag + ciphertext
+            header = len(pdu_data).to_bytes(2, 'big')
+            s.sendall(header)
+            s.sendall(pdu_data)
+    finally:
+        s.close()
+
+
+def main():
+    argv = sys.argv
+    password = argv[2].encode('utf-8')
+    
+    if argv[3] == "-l":
+        port = int(argv[4])
+        server(port, password)
+    else:
+        host = argv[3]
+        port = int(argv[4])
+        client(host, port, password)
+
+if __name__ == "__main__":
+    main()
