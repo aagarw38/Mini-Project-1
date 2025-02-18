@@ -2,13 +2,6 @@
 import sys
 import socket
 
-def getData(sock, n):
-    data = b''
-    while len(data) < n:
-        packet = sock.recv(n - len(data))
-        data += packet
-    return data
-
 def server(port):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     s.bind(('', port))
@@ -16,9 +9,9 @@ def server(port):
     conn, _ = s.accept()
     try:
         while True:
-            header = getData(conn, 2)
+            header = conn.recv(2)
             data_length = int.from_bytes(header, 'big')
-            data = getData(conn, data_length)  
+            data = conn.recv(data_length) 
             sys.stdout.buffer.write(data)
             sys.stdout.buffer.flush()
     finally:
