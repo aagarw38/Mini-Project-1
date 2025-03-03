@@ -1,0 +1,6 @@
+To perform the encryption, you will use PyCryptodome. Note that PyCryptodome is a
+drop-in replacement for PyCrypto, which does not support GCM. Unfortunately, most
+systems provide PyCrypto instead of PyCryptodome, so you may need to read the installation instructions. The documentation for PyCryptodome has several useful examples,
+but you will likely need to read the API documentation, specifically for using GCM.
+You must:
+

@@ -10,8 +10,10 @@ def server(port):
     try:
         while True:
             header = conn.recv(2)
+            if not header or len(header) < 2:
+                break
             data_length = int.from_bytes(header, 'big')
-            data = conn.recv(data_length) 
+            data = conn.recv(data_length)
             sys.stdout.buffer.write(data)
             sys.stdout.buffer.flush()
     finally:
@@ -23,7 +25,9 @@ def client(host, port):
     s.connect((host, port))
     try:
         while True:
-            chunk = sys.stdin.buffer.read(65535)
+            chunk = sys.stdin.buffer.read(1024)
+            if not chunk: 
+                break
             header = len(chunk).to_bytes(2, 'big')  
             s.sendall(header)
             s.sendall(chunk)

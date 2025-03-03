@@ -14,31 +14,40 @@ def server(port, password):
         s.listen(1)
         conn, addr = s.accept()
         try:
-            # Receive the 16-byte salt and derive the key.
             salt = conn.recv(16)
+            print("server salt"+str(salt))
             if len(salt) < 16:
                 return
             key = PBKDF2(password, salt, dkLen=32)
-            decrypted_data = b''
+
             while True:
                 header = conn.recv(2)
-                if len(header) < 2:
+                if not header or len(header) < 2:
                     break  
                 total_len = int.from_bytes(header, 'big')
-                pdu = conn.recv(total_len)
-                if len(pdu) < total_len:
+                data = b''
+                remaining = total_len
+                while remaining > 0:
+                    chunk = conn.recv(remaining)
+                    data += chunk
+                    remaining -= len(chunk)
+                if len(data) < 32:  
                     break
-                nonce = pdu[:16]
-                tag   = pdu[16:32]
-                ciphertext = pdu[32:]
+                nonce = data[:16]
+                tag = data[16:32]
+                ciphertext = data[32:]
+
+                cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
                 try:
-                    cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
-                    chunk = cipher.decrypt_and_verify(ciphertext, tag)
-                    decrypted_data += chunk
+                    plaintext = cipher.decrypt_and_verify(ciphertext, tag)
+                    plaintext = unpad(plaintext, 16)
+                    
+                    print("server nonce"+str(nonce))
+                    print("server tag"+str(tag))
+                    print("server ciphertext"+str(ciphertext))
                 except ValueError:
                     sys.stderr.write("Error: integrity check failed.")
                     sys.exit(1)
-            plaintext = unpad(decrypted_data, 16)
             sys.stdout.buffer.write(plaintext)
             sys.stdout.buffer.flush()
         finally:
@@ -51,20 +60,32 @@ def client(host, port, password):
     try:
         s.connect((host, port))
         salt = get_random_bytes(16)
+        print("client salt"+str(salt))
         s.sendall(salt)
         key = PBKDF2(password, salt, dkLen=32)
-        plaintext = sys.stdin.buffer.read()
-        padded = pad(plaintext, 16)
-        CHUNK_SIZE = 1024
-        for i in range(0, len(padded), CHUNK_SIZE):
-            chunk = padded[i:i+CHUNK_SIZE]
+
+        while True:
+            plaintext = sys.stdin.buffer.read(1024)
+            if not plaintext:
+                break
+            
+            padded_plaintext = pad(plaintext, 16)
+            
             nonce = get_random_bytes(16)
+            
             cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
-            ciphertext, tag = cipher.encrypt_and_digest(chunk)
-            pdu_data = nonce + tag + ciphertext
-            header = len(pdu_data).to_bytes(2, 'big')
-            s.sendall(header)
-            s.sendall(pdu_data)
+            ciphertext, tag = cipher.encrypt_and_digest(padded_plaintext)
+            
+            total_length = len(nonce) + len(tag) + len(ciphertext)
+            
+            s.sendall(total_length.to_bytes(2, byteorder='big'))
+            
+            s.sendall(nonce)
+            s.sendall(tag)
+            s.sendall(ciphertext)
+            print("client nonce"+str(nonce))
+            print("client tag"+str(tag))
+            print("client ciphertext"+str(ciphertext))
     finally:
         s.close()
 
