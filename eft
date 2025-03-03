@@ -6,6 +6,15 @@ from Crypto.Protocol.KDF import PBKDF2
 from Crypto.Util.Padding import pad, unpad
 from Crypto.Random import get_random_bytes
 
+def recvall(sock, n):
+    data = b""
+    while len(data) < n:
+        packet = sock.recv(n - len(data))
+        if not packet:
+            return None
+        data += packet
+    return data
+
 def server(port, password):
     """Server: receive the salt then PDUs and decrypt each one."""
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -13,42 +22,43 @@ def server(port, password):
         s.bind(('', port))
         s.listen(1)
         conn, addr = s.accept()
+        
         try:
-            salt = conn.recv(16)
-            print("server salt"+str(salt))
-            if len(salt) < 16:
+            salt = recvall(conn,16)
+            if salt is None or len(salt) < 16:
                 return
+            
             key = PBKDF2(password, salt, dkLen=32)
-
+            
+            all_plaintext = b""
+            
             while True:
-                header = conn.recv(2)
+
+                header = recvall(conn,2)
                 if not header or len(header) < 2:
                     break  
                 total_len = int.from_bytes(header, 'big')
-                data = b''
-                remaining = total_len
-                while remaining > 0:
-                    chunk = conn.recv(remaining)
-                    data += chunk
-                    remaining -= len(chunk)
-                if len(data) < 32:  
+                
+                data = recvall(conn, total_len)
+                if data is None or len(data) < total_len:
                     break
+
                 nonce = data[:16]
                 tag = data[16:32]
                 ciphertext = data[32:]
 
                 cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+
                 try:
                     plaintext = cipher.decrypt_and_verify(ciphertext, tag)
                     plaintext = unpad(plaintext, 16)
-                    
-                    print("server nonce"+str(nonce))
-                    print("server tag"+str(tag))
-                    print("server ciphertext"+str(ciphertext))
+                    all_plaintext += plaintext
+
                 except ValueError:
                     sys.stderr.write("Error: integrity check failed.")
                     sys.exit(1)
-            sys.stdout.buffer.write(plaintext)
+
+            sys.stdout.buffer.write(all_plaintext)
             sys.stdout.buffer.flush()
         finally:
             conn.close()
@@ -59,13 +69,16 @@ def client(host, port, password):
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         s.connect((host, port))
+
         salt = get_random_bytes(16)
-        print("client salt"+str(salt))
+
         s.sendall(salt)
+
         key = PBKDF2(password, salt, dkLen=32)
 
         while True:
             plaintext = sys.stdin.buffer.read(1024)
+
             if not plaintext:
                 break
             
@@ -79,13 +92,9 @@ def client(host, port, password):
             total_length = len(nonce) + len(tag) + len(ciphertext)
             
             s.sendall(total_length.to_bytes(2, byteorder='big'))
-            
             s.sendall(nonce)
             s.sendall(tag)
             s.sendall(ciphertext)
-            print("client nonce"+str(nonce))
-            print("client tag"+str(tag))
-            print("client ciphertext"+str(ciphertext))
     finally:
         s.close()
 
