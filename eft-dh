@@ -27,7 +27,6 @@ def server(port):
     conn, _ = s.accept()
     try:
         # --- Diffie–Hellman exchange, server side ---
-        # First, receive client's DH public value (384-character UTF-8 string)
         client_pub_bytes = recvall(conn, 384)
         client_public = int(client_pub_bytes.decode('utf-8'))
         
@@ -39,6 +38,7 @@ def server(port):
         shared_secret_hex = '%x' % shared_secret
         key = sha256(shared_secret_hex.encode('utf-8')).digest()
 
+        # --- Receive encrypted data ---
         all_plaintext = b""
         while True:
             header = recvall(conn, 2)
@@ -63,7 +63,6 @@ def client(host, port):
     s.connect((host, port))
     try:
         # --- Diffie–Hellman exchange, client side ---
-        # Generate client's private key and public value
         private_exponent = random.randint(0, p - 2)
         client_public = str(pow(g, private_exponent, p)).rjust(384, '0').encode('utf-8')
         
@@ -76,7 +75,7 @@ def client(host, port):
         shared_secret_hex = '%x' % shared_secret
         key = sha256(shared_secret_hex.encode('utf-8')).digest()
         
-
+        # --- Send encrypted data ---
         while True:
             plaintext = sys.stdin.buffer.read(1024)
             if not plaintext: break

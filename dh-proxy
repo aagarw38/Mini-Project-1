@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+import sys
+import socket
+import select
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad, unpad
+from Crypto.Random import get_random_bytes, random
+from hashlib import sha256
+
+# Fixed Diffie–Hellman parameters (identical to Part 3)
+g = 2
+p = int("0x00cc81ea8157352a9e9a318aac4e33ffba80fc8da3373fb44895109e4c3ff6cedcc55c02228fccbd551a504feb4346d2aef47053311ceaba95f6c540b967b9409e9f0502e598cfc71327c5a455e2e807bede1e0b7d23fbea054b951ca964eaecae7ba842ba1fc6818c453bf19eb9c5c86e723e69a210d4b72561cab97b3fb3060b", 16)
+
+def recvall(sock, n):
+    data = b""
+    while len(data) < n:
+        packet = sock.recv(n - len(data))
+        if not packet:
+            break
+        data += packet
+    return data
+
+def proxy_pdu(sock_in, key_in, key_out, sock_out):
+    
+    header = recvall(sock_in, 2)
+    if not header or len(header) != 2:
+        return False
+    total_len = int.from_bytes(header, 'big')
+    data = recvall(sock_in, total_len)
+    if not data or len(data) != total_len:
+        return False
+
+    nonce = data[:16]
+    tag = data[16:32]
+    ciphertext = data[32:]
+
+    # Decrypt the intercepted data using the key from one direction.
+    cipher = AES.new(key_in, AES.MODE_GCM, nonce=nonce)
+    padded_plaintext = cipher.decrypt_and_verify(ciphertext, tag)
+    plaintext = unpad(padded_plaintext, 16)
+
+    # Re-encrypt the plaintext for the other direction.
+    new_nonce = get_random_bytes(16)
+    cipher_out = AES.new(key_out, AES.MODE_GCM, nonce=new_nonce)
+    padded_data = pad(plaintext, 16)
+    new_ciphertext, new_tag = cipher_out.encrypt_and_digest(padded_data)
+    new_total_len = len(new_nonce) + len(new_tag) + len(new_ciphertext)
+
+    sock_out.sendall(new_total_len.to_bytes(2, 'big'))
+    sock_out.sendall(new_nonce)
+    sock_out.sendall(new_tag)
+    sock_out.sendall(new_ciphertext)
+
+    return True
+
+def dh_proxy(listen_port, server_ip, server_port):
+
+    listen_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listen_sock.bind(('', listen_port))
+    listen_sock.listen(1)
+    client_conn, client_addr = listen_sock.accept()
+
+    client_pub_bytes = recvall(client_conn, 384)
+    client_public = int(client_pub_bytes.decode('utf-8'))
+
+    # generate proxy's secret for the connection with the client.
+    private_exponent_client = random.randint(0, p - 2)
+    proxy_client_pub = str(pow(g, private_exponent_client, p)).rjust(384, '0').encode('utf-8')
+    client_conn.sendall(proxy_client_pub)
+    shared_secret_client = pow(client_public, private_exponent_client, p)
+    shared_secret_client_hex = '%x' % shared_secret_client
+    key_client = sha256(shared_secret_client_hex.encode('utf-8')).digest()
+
+    
+    # act as client to the server.
+    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_sock.connect((server_ip, server_port))
+    
+    private_exponent_server = random.randint(0, p - 2)
+    proxy_server_pub = str(pow(g, private_exponent_server, p)).rjust(384, '0').encode('utf-8')
+    server_sock.sendall(proxy_server_pub)
+    server_pub_bytes = recvall(server_sock, 384)
+    server_public = int(server_pub_bytes.decode('utf-8'))
+
+    shared_secret_server = pow(server_public, private_exponent_server, p)
+    shared_secret_server_hex = '%x' % shared_secret_server
+    key_server = sha256(shared_secret_server_hex.encode('utf-8')).digest()
+
+    # send PDUs between client and server.
+    sockets = [client_conn, server_sock]
+    while True:
+        rlist, _, _ = select.select(sockets, [], [])
+        for s in rlist:
+            if s is client_conn:
+                # Read data from the client, decrypt with key_client and re-encrypt with key_server.
+                if not proxy_pdu(client_conn, key_client, key_server, server_sock):
+                    return # Closing connection
+                
+            elif s is server_sock:
+                # Relay data from server back to client.
+                if not proxy_pdu(server_sock, key_server, key_client, client_conn):
+                    return # Closing connection
+
+def main():
+    listen_port = int(sys.argv[2])
+    server_ip = sys.argv[3]
+    server_port = int(sys.argv[4])
+    dh_proxy(listen_port, server_ip, server_port)
+
+if __name__ == "__main__":
+    main()
