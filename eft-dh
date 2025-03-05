@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+import sys
+import socket
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad, unpad
+from Crypto.Random import get_random_bytes, random
+from Crypto.Hash import SHA256
+from hashlib import sha256
+
+# Fixed Diffie–Hellman parameters
+g = 2
+p = int("0x00cc81ea8157352a9e9a318aac4e33ffba80fc8da3373fb44895109e4c3ff6cedcc55c02228fccbd551a504feb4346d2aef47053311ceaba95f6c540b967b9409e9f0502e598cfc71327c5a455e2e807bede1e0b7d23fbea054b951ca964eaecae7ba842ba1fc6818c453bf19eb9c5c86e723e69a210d4b72561cab97b3fb3060b", 16)
+
+def recvall(sock, n):
+    data = b""
+    while len(data) < n:
+        packet = sock.recv(n - len(data))
+        if not packet:  
+            break
+        data += packet
+    return data
+
+def server(port):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.bind(('', port))
+    s.listen(1)
+    conn, _ = s.accept()
+    try:
+        # --- Diffie–Hellman exchange, server side ---
+        # First, receive client's DH public value (384-character UTF-8 string)
+        client_pub_bytes = recvall(conn, 384)
+        client_public = int(client_pub_bytes.decode('utf-8'))
+        
+        private_exponent = random.randint(0, p - 2)
+        server_public = str(pow(g, private_exponent, p)).rjust(384, '0').encode('utf-8')
+        conn.sendall(server_public)
+        
+        shared_secret = pow(client_public, private_exponent, p)
+        shared_secret_hex = '%x' % shared_secret
+        key = sha256(shared_secret_hex.encode('utf-8')).digest()
+
+        all_plaintext = b""
+        while True:
+            header = recvall(conn, 2)
+            if not header: break
+            total_len = int.from_bytes(header, 'big')
+            data = recvall(conn, total_len)
+            nonce = data[:16]
+            tag = data[16:32]
+            ciphertext = data[32:]
+            cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+            plaintext = unpad(cipher.decrypt_and_verify(ciphertext, tag), 16)
+            all_plaintext += plaintext
+
+        sys.stdout.buffer.write(all_plaintext)
+        sys.stdout.buffer.flush()
+    finally:
+        conn.close()
+        s.close()
+
+def client(host, port):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.connect((host, port))
+    try:
+        # --- Diffie–Hellman exchange, client side ---
+        # Generate client's private key and public value
+        private_exponent = random.randint(0, p - 2)
+        client_public = str(pow(g, private_exponent, p)).rjust(384, '0').encode('utf-8')
+        
+        s.sendall(client_public)
+        
+        server_pub_bytes = recvall(s, 384)
+        server_public = int(server_pub_bytes.decode('utf-8'))
+        
+        shared_secret = pow(server_public, private_exponent, p)
+        shared_secret_hex = '%x' % shared_secret
+        key = sha256(shared_secret_hex.encode('utf-8')).digest()
+        
+
+        while True:
+            plaintext = sys.stdin.buffer.read(1024)
+            if not plaintext: break
+            padded = pad(plaintext, 16)
+            nonce = get_random_bytes(16)
+            cipher = AES.new(key, AES.MODE_GCM,nonce=nonce)
+            ciphertext, tag = cipher.encrypt_and_digest(padded)
+
+            total_length = len(nonce) + len(tag) + len(ciphertext)
+            s.sendall(total_length.to_bytes(2, 'big'))
+            s.sendall(nonce)
+            s.sendall(tag)
+            s.sendall(ciphertext)
+    finally:
+        s.close()
+
+def main():
+    argv = sys.argv
+    if argv[1] == "-l":
+        server(int(argv[2]))
+    else:
+        client(argv[1], int(argv[2]))
+
+if __name__ == "__main__":
+    main()

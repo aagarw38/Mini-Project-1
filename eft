@@ -16,13 +16,12 @@ def recvall(sock, n):
     return data
 
 def server(port, password):
-    """Server: receive the salt then PDUs and decrypt each one."""
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     try:
         s.bind(('', port))
         s.listen(1)
         conn, addr = s.accept()
-        
+
         try:
             salt = recvall(conn,16)
             if salt is None or len(salt) < 16:
