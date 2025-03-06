@@ -1,0 +1,57 @@
+To perform the encryption, you will use PyCryptodome. Note that PyCryptodome is a
+drop-in replacement for PyCrypto, which does not support GCM. Unfortunately, most
+systems provide PyCrypto instead of PyCryptodome, so you may need to read the installation instructions. The documentation for PyCryptodome has several useful examples,
+but you will likely need to read the API documentation, specifically for using GCM.
+You must:
+
+Part 2 (25 points): Encrypted File Transfer
+Filename: eft or eft.py
+In Part 2, you will extend uft with symmetric encryption and integrity verification using
+AES and the Galois Counter Mode (AES-GCM) mode of operation. Recall that GCM
+avoids the need to incorporate integrity into the cryptographic protocol (e.g., Encryptthen-MAC).
+To perform the encryption, you will use PyCryptodome. Note that PyCryptodome is a
+drop-in replacement for PyCrypto, which does not support GCM. Unfortunately, most
+systems provide PyCrypto instead of PyCryptodome, so you may need to read the installation instructions. The documentation for PyCryptodome has several useful examples,
+but you will likely need to read the API documentation, specifically for using GCM.
+You must:
+1. Use AES-256 in GCM mode
+2. Compute a 32 byte key from the command line argument using PBKDF2 (PasswordBased Key Derivation Function), which is available in PyCryptodome. Note that that
+using PBKDF2 requires a salt, which is a securely generated random value. Both the
+client and server need to use the same salt; therefore, your connection should start
+with the client sending the salt to the server. This initial exchange will also get you
+ready for Part 3.
+3. Pad the data into 16 byte (128 bit) AES blocks using the pkcs7 style. The pad and
+unpad functions are available as utility functions in PyCryptodome.
+4. To successfully decrypt the data, the server must receive the IV (“nonce” in the GCM
+API) from the client.
+Your code for the client and server must reside in the same Python script (eft), which
+must conform to the following command line options:
+The following is an example execution.
+eft -k KEY [-l PORT] [SERVER_IP_ADDRESS PORT]
+[client]$ ./eft -k SECURITYISAWESOME 127.0.0.1 9999 < some-file.txt
+You may assume the server is started before the client.
+If an integrity error occurs (e.g., the key is incorrect), the server should write the following error text to STDERR. Note that this exact error message is required to pass all automated grading checks.
+The following is an example execution demonstrating the integrity check output.
+Packet Data Unit Structure: The PDUs exchanged between client and server must conform to the following specifications to be graded by the autograder:
+Salt Exchange
+Element Size in Bytes Description Encoding
+Salt 16
+Securely generated
+random value used in
+PBKDF2
+Raw Bytes
+Data Segment
+Element Size in Bytes Description Encoding
+Length 2
+Length of Nonce,
+Tag, and Data combined
+Raw Bytes
+Nonce 16 Random Initialization
+Vector (IV) Raw Bytes
+Tag 16 Integrity Verification
+Tag Raw Byte
+Data Length - 32 Encrypted File Data Raw Bytes
+Tip: PyCryptodome installs into the Crypto python module.
+Tip: PBKDF2 will by default produce a 16 byte key for AES-128. It accepts an optional
+length parameter dkLen which should be set to 32 to get a 32 byte key.
+Tip: Avoid passing other optional arguments to PBKDF2 as this will change the key derived from the shared key which will cause some autograder tests t

